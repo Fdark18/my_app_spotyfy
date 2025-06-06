@@ -1,0 +1,21 @@
+
+services:
+  spotify-app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - SPOTIPY_CLIENT_ID=${SPOTIPY_CLIENT_ID}
+      - SPOTIPY_CLIENT_SECRET=${SPOTIPY_CLIENT_SECRET}
+      - SPOTIPY_REDIRECT_URI=http://localhost:8000/callback
+      - SECRET_KEY=${SECRET_KEY}
+    volumes:
+      - ./app:/app
+    restart: unless-stopped
+
+  # Opcional: Redis para cache de sessões
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
