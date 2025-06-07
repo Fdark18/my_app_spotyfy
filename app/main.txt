@@ -1,0 +1,579 @@
+import os
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
+from flask import Flask, request, redirect, session, render_template_string, jsonify
+from dotenv import load_dotenv
+import requests
+
+load_dotenv()
+
+app = Flask(__name__)
+app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key')
+
+# Configuração do Spotify
+SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
+SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
+SPOTIPY_REDIRECT_URI = os.getenv('SPOTIPY_REDIRECT_URI', 'https://d012-186-224-132-223.ngrok-free.app')
+
+# Scopes necessários para controle de reprodução
+scope = "user-read-playback-state,user-modify-playback-state,user-read-currently-playing,playlist-read-private,user-read-recently-played"
+
+def get_spotify_oauth():
+    return SpotifyOAuth(
+        client_id=SPOTIPY_CLIENT_ID,
+        client_secret=SPOTIPY_CLIENT_SECRET,
+        redirect_uri=SPOTIPY_REDIRECT_URI,
+        scope=scope,
+        show_dialog=True
+    )
+
+def get_spotify_client():
+    token_info = session.get('token_info')
+    if not token_info:
+        return None
+    return spotipy.Spotify(auth=token_info['access_token'])
+
+@app.route('/')
+def index():
+    code = request.args.get('code')
+    if code:
+        return redirect(f'/callback?code={code}')
+    
+    return render_template_string('''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Spotify Music App</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; background: #191414; color: white; text-align: center; }
+            .btn { background: #1db954; color: white; padding: 15px 30px; text-decoration: none; border-radius: 25px; font-weight: bold; font-size: 18px; }
+            .btn:hover { background: #1ed760; }
+            h1 { color: #1db954; font-size: 3em; margin-bottom: 20px; }
+            .subtitle { color: #b3b3b3; font-size: 1.2em; margin-bottom: 40px; }
+        </style>
+    </head>
+    <body>
+        <h1>🎵 Spotify Music Controller</h1>
+        <p class="subtitle">Controle sua música com facilidade!</p>
+        <a href="/login" class="btn">🎧 Conectar ao Spotify</a>
+    </body>
+    </html>
+    ''')
+
+@app.route('/login')
+def login():
+    sp_oauth = get_spotify_oauth()
+    auth_url = sp_oauth.get_authorize_url()
+    return redirect(auth_url)
+
+@app.route('/callback')
+def callback():
+    sp_oauth = get_spotify_oauth()
+    code = request.args.get('code')
+    error = request.args.get('error')
+    
+    if error:
+        return f"Erro na autorização: {error}"
+    if not code:
+        return "Código de autorização não encontrado"
+    
+    try:
+        token_info = sp_oauth.get_access_token(code, as_dict=True)
+        session['token_info'] = token_info
+        return redirect('/dashboard')
+    except Exception as e:
+        return f"Erro ao obter token: {e}"
+
+@app.route('/dashboard')
+def dashboard():
+    sp = get_spotify_client()
+    if not sp:
+        return redirect('/login')
+    
+    try:
+        current_track = sp.current_user_playing_track()
+        user_profile = sp.current_user()
+        devices = sp.devices()
+        
+        return render_template_string('''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Dashboard - Spotify Controller</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 0; background: #191414; color: white; }
+                .container { max-width: 1000px; margin: 0 auto; padding: 20px; }
+                .player-card { background: linear-gradient(135deg, #1db954, #1ed760); padding: 30px; border-radius: 15px; margin: 20px 0; text-align: center; }
+                .controls { display: flex; justify-content: center; gap: 15px; margin: 20px 0; }
+                .control-btn { background: rgba(255,255,255,0.2); border: none; color: white; padding: 15px; border-radius: 50%; cursor: pointer; font-size: 20px; transition: all 0.3s; }
+                .control-btn:hover { background: rgba(255,255,255,0.3); transform: scale(1.1); }
+                .play-pause { background: #fff; color: #1db954; font-size: 24px; padding: 20px; }
+                .track-info { margin: 20px 0; }
+                .track-title { font-size: 24px; font-weight: bold; margin: 10px 0; }
+                .track-artist { font-size: 18px; opacity: 0.9; }
+                .btn { background: #1db954; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin: 5px; display: inline-block; }
+                .btn:hover { background: #1ed760; }
+                .card { background: #282828; padding: 20px; margin: 20px 0; border-radius: 10px; }
+                h1 { color: #1db954; text-align: center; }
+                .device-info { background: #333; padding: 10px; border-radius: 5px; margin: 10px 0; }
+                .lyrics-btn { background: #e22134; }
+                .lyrics-btn:hover { background: #ff4757; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🎵 Olá, {{ user_name }}!</h1>
+                
+                <div class="player-card">
+                    <div class="track-info">
+                        {% if current_track and current_track.item %}
+                            <div class="track-title">{{ current_track.item.name }}</div>
+                            <div class="track-artist">{{ current_track.item.artists[0].name }}</div>
+                            <div style="margin: 10px 0;">
+                                <span style="background: rgba(0,0,0,0.3); padding: 5px 10px; border-radius: 15px;">
+                                    {{ "▶️ Tocando" if current_track.is_playing else "⏸️ Pausado" }}
+                                </span>
+                            </div>
+                        {% else %}
+                            <div class="track-title">Nenhuma música tocando</div>
+                            <div class="track-artist">Abra o Spotify e comece a tocar algo!</div>
+                        {% endif %}
+                    </div>
+                    
+                    <div class="controls">
+                        <button class="control-btn" onclick="previousTrack()">⏮️</button>
+                        <button class="control-btn play-pause" onclick="togglePlayPause()">
+                            {{ "⏸️" if current_track and current_track.is_playing else "▶️" }}
+                        </button>
+                        <button class="control-btn" onclick="nextTrack()">⏭️</button>
+                    </div>
+                    
+                    {% if current_track and current_track.item %}
+                    <div style="margin-top: 20px;">
+                        <button class="btn lyrics-btn" onclick="showLyrics('{{ current_track.item.name }}', '{{ current_track.item.artists[0].name }}')">
+                            📝 Ver Letra
+                        </button>
+                    </div>
+                    {% endif %}
+                </div>
+                
+                {% if devices and devices.devices %}
+                <div class="card">
+                    <h3>🔊 Dispositivos Disponíveis:</h3>
+                    {% for device in devices.devices %}
+                        <div class="device-info">
+                            {{ device.name }} ({{ device.type }}) 
+                            {% if device.is_active %}
+                                <span style="color: #1db954;">● Ativo</span>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                
+                <div class="card" style="text-align: center;">
+                    <h3>🎯 Ações Rápidas:</h3>
+                    <a href="/search" class="btn">🔍 Buscar Músicas</a>
+                    <a href="/top-tracks" class="btn">🏆 Top Músicas</a>
+                    <a href="/recent" class="btn">🕒 Recentes</a>
+                    <a href="/logout" class="btn" style="background: #e22134;">🚪 Logout</a>
+                </div>
+            </div>
+            
+            <!-- Modal para letras -->
+            <div id="lyricsModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000;">
+                <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #282828; padding: 30px; border-radius: 15px; max-width: 600px; max-height: 80%; overflow-y: auto;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h3 id="lyricsTitle" style="color: #1db954; margin: 0;"></h3>
+                        <button onclick="closeLyrics()" style="background: #e22134; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer;">✕</button>
+                    </div>
+                    <div id="lyricsContent" style="line-height: 1.6; white-space: pre-line;"></div>
+                </div>
+            </div>
+            
+            <script>
+                async function togglePlayPause() {
+                    try {
+                        const response = await fetch('/api/toggle-playback', { method: 'POST' });
+                        const result = await response.json();
+                        if (result.success) {
+                            location.reload();
+                        } else {
+                            alert('Erro: ' + result.error);
+                        }
+                    } catch (error) {
+                        alert('Erro ao controlar reprodução: ' + error);
+                    }
+                }
+                
+                async function nextTrack() {
+                    try {
+                        const response = await fetch('/api/next-track', { method: 'POST' });
+                        const result = await response.json();
+                        if (result.success) {
+                            setTimeout(() => location.reload(), 1000);
+                        } else {
+                            alert('Erro: ' + result.error);
+                        }
+                    } catch (error) {
+                        alert('Erro ao avançar música: ' + error);
+                    }
+                }
+                
+                async function previousTrack() {
+                    try {
+                        const response = await fetch('/api/previous-track', { method: 'POST' });
+                        const result = await response.json();
+                        if (result.success) {
+                            setTimeout(() => location.reload(), 1000);
+                        } else {
+                            alert('Erro: ' + result.error);
+                        }
+                    } catch (error) {
+                        alert('Erro ao voltar música: ' + error);
+                    }
+                }
+                
+                async function showLyrics(trackName, artistName) {
+                    document.getElementById('lyricsTitle').textContent = trackName + ' - ' + artistName;
+                    document.getElementById('lyricsContent').textContent = 'Carregando letra...';
+                    document.getElementById('lyricsModal').style.display = 'block';
+                    
+                    try {
+                        const response = await fetch(`/api/lyrics?track=${encodeURIComponent(trackName)}&artist=${encodeURIComponent(artistName)}`);
+                        const result = await response.json();
+                        
+                        if (result.success) {
+                            document.getElementById('lyricsContent').textContent = result.lyrics;
+                        } else {
+                            document.getElementById('lyricsContent').textContent = 'Letra não encontrada para esta música.\\n\\nTente buscar manualmente no Google ou em sites de letras como:\\n• Letras.mus.br\\n• Genius.com\\n• AZLyrics.com';
+                        }
+                    } catch (error) {
+                        document.getElementById('lyricsContent').textContent = 'Erro ao carregar letra: ' + error;
+                    }
+                }
+                
+                function closeLyrics() {
+                    document.getElementById('lyricsModal').style.display = 'none';
+                }
+                
+                // Fechar modal clicando fora
+                document.getElementById('lyricsModal').onclick = function(e) {
+                    if (e.target === this) {
+                        closeLyrics();
+                    }
+                }
+            </script>
+        </body>
+        </html>
+        ''', 
+        current_track=current_track, 
+        user_name=user_profile.get('display_name', 'Usuário'),
+        devices=devices
+        )
+        
+    except Exception as e:
+        return f"Erro ao carregar dashboard: {e}"
+
+# APIs para controle de reprodução
+@app.route('/api/toggle-playback', methods=['POST'])
+def toggle_playback():
+    sp = get_spotify_client()
+    if not sp:
+        return jsonify({'success': False, 'error': 'Não autenticado'})
+    
+    try:
+        current = sp.current_user_playing_track()
+        if current and current['is_playing']:
+            sp.pause_playback()
+        else:
+            sp.start_playback()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/next-track', methods=['POST'])
+def next_track():
+    sp = get_spotify_client()
+    if not sp:
+        return jsonify({'success': False, 'error': 'Não autenticado'})
+    
+    try:
+        sp.next_track()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/previous-track', methods=['POST'])
+def previous_track():
+    sp = get_spotify_client()
+    if not sp:
+        return jsonify({'success': False, 'error': 'Não autenticado'})
+    
+    try:
+        sp.previous_track()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/lyrics')
+def get_lyrics():
+    track = request.args.get('track', '')
+    artist = request.args.get('artist', '')
+    
+    # Simulação de busca de letras (você pode integrar com APIs como Genius, Musixmatch, etc.)
+    # Por questões de direitos autorais, não vou implementar busca real de letras
+    return jsonify({
+        'success': False, 
+        'lyrics': f'Letra não disponível para "{track}" de {artist}.\n\nPara ver a letra desta música, visite:\n• Google: "{track} {artist} letra"\n• Letras.mus.br\n• Genius.com'
+    })
+
+@app.route('/recent')
+def recent_tracks():
+    sp = get_spotify_client()
+    if not sp:
+        return redirect('/login')
+    
+    try:
+        recent = sp.current_user_recently_played(limit=20)
+        return render_template_string('''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Músicas Recentes - Spotify App</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; background: #191414; color: white; }
+                .container { max-width: 800px; margin: 0 auto; }
+                .btn { background: #1db954; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }
+                ul { list-style: none; padding: 0; }
+                li { background: #282828; margin: 10px 0; padding: 15px; border-radius: 5px; }
+                h1 { color: #1db954; }
+                .play-btn { background: #1db954; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; margin-left: 10px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🕒 Músicas Tocadas Recentemente</h1>
+                
+                <ul>
+                {% for item in recent.items %}
+                    <li>
+                        <strong>{{ item.track.name }}</strong><br>
+                        <em>{{ item.track.artists[0].name }}</em><br>
+                        <small>Tocada em: {{ item.played_at[:10] }} às {{ item.played_at[11:16] }}</small>
+                        <button class="play-btn" onclick="playTrack('{{ item.track.uri }}')">▶️ Tocar</button>
+                    </li>
+                {% endfor %}
+                </ul>
+                
+                <a href="/dashboard" class="btn">← Voltar ao Dashboard</a>
+            </div>
+            
+            <script>
+                async function playTrack(uri) {
+                    try {
+                        const response = await fetch('/api/play-track', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ uri: uri })
+                        });
+                        const result = await response.json();
+                        if (result.success) {
+                            alert('Música iniciada!');
+                        } else {
+                            alert('Erro: ' + result.error);
+                        }
+                    } catch (error) {
+                        alert('Erro: ' + error);
+                    }
+                }
+            </script>
+        </body>
+        </html>
+        ''', recent=recent)
+        
+    except Exception as e:
+        return f"Erro ao carregar músicas recentes: {e}"
+
+@app.route('/api/play-track', methods=['POST'])
+def play_track():
+    sp = get_spotify_client()
+    if not sp:
+        return jsonify({'success': False, 'error': 'Não autenticado'})
+    
+    try:
+        data = request.get_json()
+        uri = data.get('uri')
+        sp.start_playback(uris=[uri])
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# Manter as outras rotas existentes (search, top-tracks, logout)
+@app.route('/search')
+def search():
+    query = request.args.get('q', '')
+    results = None
+    tracks = []
+    
+    if query:
+        sp = get_spotify_client()
+        if sp:
+            try:
+                results = sp.search(q=query, type='track', limit=10)
+                if results and 'tracks' in results and 'items' in results['tracks']:
+                    tracks = results['tracks']['items']
+            except Exception as e:
+                return f"Erro na busca: {e}"
+    
+    return render_template_string('''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Buscar - Spotify App</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; background: #191414; color: white; }
+            .container { max-width: 800px; margin: 0 auto; }
+            input { padding: 10px; width: 300px; border: none; border-radius: 5px; margin-right: 10px; }
+            button { background: #1db954; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }
+            .btn { background: #1db954; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }
+            ul { list-style: none; padding: 0; }
+            li { background: #282828; margin: 10px 0; padding: 15px; border-radius: 5px; }
+            h1 { color: #1db954; }
+            .play-btn { background: #1db954; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; margin: 5px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🔍 Buscar Músicas</h1>
+            
+            <form method="GET">
+                <input type="text" name="q" value="{{ query }}" placeholder="Digite o nome da música ou artista..." autofocus>
+                <button type="submit">Buscar</button>
+            </form>
+            
+            {% if tracks %}
+                <h2>Resultados ({{ tracks|length }}):</h2>
+                <ul>
+                {% for track in tracks %}
+                    <li>
+                        <strong>{{ track.name }}</strong><br>
+                        <em>{{ track.artists[0].name }}</em><br>
+                        <small>{{ track.album.name }} ({{ track.album.release_date[:4] }}) | ⭐ {{ track.popularity }}/100</small><br>
+                        <button class="play-btn" onclick="playTrack('{{ track.uri }}')">▶️ Tocar</button>
+                        <button class="play-btn" onclick="showLyrics('{{ track.name }}', '{{ track.artists[0].name }}')" style="background: #e22134;">📝 Letra</button>
+                    </li>
+                {% endfor %}
+                </ul>
+            {% elif query %}
+                <p>Nenhum resultado encontrado para "{{ query }}"</p>
+            {% endif %}
+            
+            <br>
+            <a href="/dashboard" class="btn">← Voltar ao Dashboard</a>
+        </div>
+        
+        <script>
+            async function playTrack(uri) {
+                try {
+                    const response = await fetch('/api/play-track', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ uri: uri })
+                    });
+                    const result = await response.json();
+                    if (result.success) {
+                        alert('Música iniciada!');
+                    } else {
+                        alert('Erro: ' + result.error);
+                    }
+                } catch (error) {
+                    alert('Erro: ' + error);
+                }
+            }
+            
+            function showLyrics(trackName, artistName) {
+                alert('Funcionalidade de letras em desenvolvimento.\\n\\nPara ver a letra de "' + trackName + '", busque no Google ou visite sites como Letras.mus.br');
+            }
+        </script>
+    </body>
+    </html>
+    ''', query=query, tracks=tracks)
+
+@app.route('/top-tracks')
+def top_tracks():
+    sp = get_spotify_client()
+    if not sp:
+        return redirect('/login')
+    
+    try:
+        top_tracks = sp.current_user_top_tracks(limit=20, time_range='medium_term')
+        
+        return render_template_string('''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Top Músicas - Spotify App</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; background: #191414; color: white; }
+                .container { max-width: 800px; margin: 0 auto; }
+                .btn { background: #1db954; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }
+                ul { list-style: none; padding: 0; }
+                li { background: #282828; margin: 10px 0; padding: 15px; border-radius: 5px; }
+                .rank { background: #1db954; color: white; padding: 5px 10px; border-radius: 50%; margin-right: 10px; }
+                h1 { color: #1db954; }
+                .play-btn { background: #1db954; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; margin: 5px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🏆 Suas Top 20 Músicas</h1>
+                
+                <ul>
+                {% for track in top_tracks.items %}
+                    <li>
+                        <span class="rank">{{ loop.index }}</span>
+                        <strong>{{ track.name }}</strong><br>
+                        <em>{{ track.artists[0].name }}</em><br>
+                        <small>Popularidade: {{ track.popularity }}/100</small>
+                        <button class="play-btn" onclick="playTrack('{{ track.uri }}')">▶️ Tocar</button>
+                    </li>
+                {% endfor %}
+                </ul>
+                
+                <a href="/dashboard" class="btn">← Voltar ao Dashboard</a>
+            </div>
+            
+            <script>
+                async function playTrack(uri) {
+                    try {
+                        const response = await fetch('/api/play-track', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ uri: uri })
+                        });
+                        const result = await response.json();
+                        if (result.success) {
+                            alert('Música iniciada!');
+                        } else {
+                            alert('Erro: ' + result.error);
+                        }
+                    } catch (error) {
+                        alert('Erro: ' + error);
+                    }
+                }
+            </script>
+        </body>
+        </html>
+        ''', top_tracks=top_tracks)
+        
+    except Exception as e:
+        return f"Erro ao carregar top tracks: {e}"
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect('/')
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8000, debug=True)
